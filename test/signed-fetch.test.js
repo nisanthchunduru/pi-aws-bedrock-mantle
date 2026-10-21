@@ -48,6 +48,53 @@ for (const destination of [
   });
 }
 
+test("GET model discovery signs an empty payload without adding a request body", async () => {
+  const signedFetch = createSignedFetch({ region: "us-west-2", credentials, fetchImplementation: async (destination, options) => {
+    assert.equal(destination, "https://bedrock-mantle.us-west-2.api.aws/v1/models");
+    assert.equal(options.method, "GET");
+    assert.equal(options.body, undefined);
+    assert.match(options.headers.get("authorization"), /us-west-2\/bedrock-mantle\/aws4_request/);
+    assert.equal(options.headers.get("x-amz-content-sha256"), createHash("sha256").update("").digest("hex"));
+    assert.equal(options.redirect, "error");
+    assert.equal(options.credentials, "omit");
+    return Response.json({ data: [] });
+  } });
+  await signedFetch("https://bedrock-mantle.us-west-2.api.aws/v1/models");
+});
+
+for (const path of ["/v1/chat/completions", "/openai/v1/chat/completions", "/anthropic/v1/messages", "/anthropic/v1/messages?beta=true"]) {
+  test(`Signs only POST for inference at ${path} and preserves protocol headers`, async () => {
+    const signedFetch = createSignedFetch({ region: "us-west-2", credentials, fetchImplementation: async (destination, options) => {
+      assert.equal(destination, `https://bedrock-mantle.us-west-2.api.aws${path}`);
+      assert.equal(options.method, "POST");
+      assert.equal(options.headers.get("anthropic-version"), "2023-06-01");
+      assert.equal(Buffer.from(options.body).toString(), "{}");
+      return new Response("ok");
+    } });
+    const destination = `https://bedrock-mantle.us-west-2.api.aws${path}`;
+    await signedFetch(destination, { method: "POST", body: "{}", headers: { "anthropic-version": "2023-06-01" } });
+    await assert.rejects(signedFetch(destination), /Refusing to sign/);
+  });
+}
+
+for (const [method, path] of [["POST", "/v1/models"], ["GET", "/openai/v1/models"], ["DELETE", "/v1/models"], ["GET", "/v1/models?after=foo"], ["GET", "/v1/models/one"], ["GET", "/v1/models#fragment"], ["POST", "/v1/responses"], ["POST", "/anthropic/v1/messages?beta=false"], ["POST", "/anthropic/v1/messages?beta=true&redirect=other"]]) {
+  test(`Rejects unsupported discovery routes before credential access: ${method} ${path}`, async () => {
+    const signedFetch = createSignedFetch({ region: "us-west-2", credentials: () => { throw Error("must not resolve"); } });
+    await assert.rejects(signedFetch(`https://bedrock-mantle.us-west-2.api.aws${path}`, { method }), /Refusing to sign/);
+  });
+}
+
+test("Cancellation interrupts slow credential resolution without sending a late request", async () => {
+  const controller = new AbortController();
+  let resolveCredentials;
+  const signedFetch = createSignedFetch({ region: "us-west-2", credentials: () => new Promise(resolve => {
+    resolveCredentials = resolve;
+    controller.abort();
+  }), fetchImplementation: () => { throw Error("must not fetch"); } });
+  await assert.rejects(signedFetch("https://bedrock-mantle.us-west-2.api.aws/v1/models", { signal: controller.signal }), { name: "AbortError" });
+  resolveCredentials(credentials);
+});
+
 test("Already aborted requests do not resolve credentials or make HTTP calls", async () => {
   let accessed = false;
   const signedFetch = createSignedFetch({ region: "us-west-2", credentials: async () => { accessed = true; return credentials; } });

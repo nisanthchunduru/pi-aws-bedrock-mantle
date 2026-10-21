@@ -1,33 +1,29 @@
 import { createCredentials } from "./credentials.js";
+import { listMantleModels } from "./discovery.js";
+import { mapMantleModels, PROVIDER_ID } from "./models.js";
 import { createSignedFetch } from "./signed-fetch.js";
 
-export const PROVIDER_ID = "aws-bedrock-mantle";
-
-export function astraModel(config) {
-  return {
-    id: "openai.gpt-6-astra", name: "GPT-6 Astra (Bedrock Mantle · IAM)", type: "chat",
-    provider: PROVIDER_ID, api: "openai-responses", baseUrl: config.baseUrl,
-    reasoning: true, input: ["text", "image"], contextWindow: 1_050_000, maxTokens: 128_000,
-    thinkingLevelMap: { xhigh: "xhigh" },
-    cost: {
-      input: 11, output: 55, cacheRead: 1.1, cacheWrite: 13.75,
-      tiers: [{ inputTokensAbove: 272_000, input: 22, output: 82.5, cacheRead: 2.2, cacheWrite: 27.5 }],
-    },
-  };
-}
+export { PROVIDER_ID } from "./models.js";
 
 export function createMantleProvider(ai, config, credentials = createCredentials(config.profile)) {
-  const responses = ai.openAIResponsesApi();
+  const catalog = ai.getModels("amazon-bedrock");
+  let discovered = { models: [], skipped: [] };
+  let checkedAt;
+  let error;
   const optionsFor = (options = {}) => ({
     ...options,
     apiKey: "iam-sigv4-not-a-secret",
     fetch: createSignedFetch({ region: config.region, credentials, fetchImplementation: options.fetch || globalThis.fetch }),
   });
-  const streams = {
-    stream: (model, context, options) => responses.stream(model, context, optionsFor(options)),
-    streamSimple: (model, context, options) => responses.streamSimple(model, context, optionsFor(options)),
-  };
-  return ai.createProvider({
+  const api = Object.fromEntries([
+    ["openai-responses", ai.openAIResponsesApi()],
+    ["openai-completions", ai.openAICompletionsApi()],
+    ["anthropic-messages", ai.anthropicMessagesApi()],
+  ].map(([name, streams]) => [name, {
+    stream: (model, context, options) => streams.stream(model, context, optionsFor(options)),
+    streamSimple: (model, context, options) => streams.streamSimple(model, context, optionsFor(options)),
+  }]));
+  const provider = ai.createProvider({
     id: PROVIDER_ID, name: "AWS Bedrock Mantle (IAM)", baseUrl: config.baseUrl,
     auth: {
       apiKey: {
@@ -35,6 +31,29 @@ export function createMantleProvider(ai, config, credentials = createCredentials
         resolve: async () => ({ auth: { apiKey: "iam-sigv4-not-a-secret" }, source: config.profile ? `AWS profile ${config.profile}` : "AWS credential chain" }),
       },
     },
-    models: [astraModel(config)], api: { "openai-responses": streams },
+    models: [], api,
   });
+  return {
+    ...provider,
+    getModels: () => discovered.models,
+    getAllModels: () => discovered.models,
+    getDiscoveryStatus: () => ({ count: discovered.models.length, skipped: [...discovered.skipped], checkedAt, error }),
+    refreshModels: async context => {
+      if (!context.allowNetwork || context.signal.aborted) return;
+      if (!context.force && checkedAt && Date.now() - checkedAt < 60_000) return;
+      const signal = AbortSignal.any([context.signal, AbortSignal.timeout(10_000)]);
+      try {
+        const entries = await listMantleModels(config, optionsFor().fetch, signal);
+        const next = mapMantleModels(entries, catalog, config);
+        signal.throwIfAborted();
+        await context.publish({ update: () => { discovered = next; checkedAt = Date.now(); error = undefined; } });
+      } catch (failure) {
+        if (!context.signal.aborted) {
+          const message = signal.aborted ? "Mantle model discovery timed out after 10 seconds." : failure.message;
+          await context.publish({ update: () => { error = message; } });
+          throw new Error(message);
+        }
+      }
+    },
+  };
 }

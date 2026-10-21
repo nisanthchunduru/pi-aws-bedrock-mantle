@@ -5,16 +5,18 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { loadConfig, resolveConfig } from "../src/config.js";
 import { refreshableCredentials } from "../src/credentials.js";
-import { astraModel, createMantleProvider, PROVIDER_ID } from "../src/provider.js";
+import { createMantleProvider, PROVIDER_ID } from "../src/provider.js";
+import { mapMantleModels } from "../src/models.js";
+import { astra, catalog, mockAi } from "./model-fixtures.js";
 
 const key = { accessKeyId: "TEST", secretAccessKey: "fake" };
 
-test("Defaults point to Astra's supported Oregon Mantle Responses endpoint", () => {
+test("Defaults select Oregon and discovered Astra retains its catalog capabilities", () => {
   const config = resolveConfig({});
   assert.equal(config.region, "us-west-2");
   assert.equal(config.baseUrl, "https://bedrock-mantle.us-west-2.api.aws/openai/v1");
   assert.equal(config.profile, undefined);
-  const model = astraModel(config);
+  const [model] = mapMantleModels([{ id: astra.id }], catalog, config).models;
   assert.equal(model.api, "openai-responses");
   assert.deepEqual(model.input, ["text", "image"]);
   assert.equal(model.contextWindow, 1050000);
@@ -109,18 +111,19 @@ test("Non-expiring credential sources are re-read after a short cache interval",
 
 test("Provider preserves payload/response/event hooks and delegates normalization to Pi", () => {
   let forwarded;
-  const ai = {
-    createProvider: value => value,
-    openAIResponsesApi: () => ({ stream: (...args) => { forwarded = args; }, streamSimple: (...args) => { forwarded = args; } }),
-  };
+  const ai = mockAi((...args) => { forwarded = args; });
   const config = resolveConfig({}, { profile: "fixture" });
   const provider = createMantleProvider(ai, config, async () => key);
   assert.equal(provider.id, PROVIDER_ID);
   const options = { onPayload: () => {}, onResponse: () => {}, onProviderStreamEvent: () => {}, signal: AbortSignal.abort(), reasoning: "high" };
-  const model = astraModel(config); const context = { messages: [] };
-  provider.api["openai-responses"].streamSimple(model, context, options);
-  assert.equal(forwarded[0], model);
-  assert.equal(forwarded[1], context);
-  for (const name of Object.keys(options)) assert.equal(forwarded[2][name], options[name]);
-  assert.equal(typeof forwarded[2].fetch, "function");
+  const context = { messages: [] };
+  for (const model of mapMantleModels([{ id: astra.id }, { id: "deepseek.v3.2" }, { id: "anthropic.claude-haiku-4-5" }], catalog, config).models) {
+    for (const method of ["stream", "streamSimple"]) {
+      provider.api[model.api][method](model, context, options);
+      assert.equal(forwarded[0], model);
+      assert.equal(forwarded[1], context);
+      for (const name of Object.keys(options)) assert.equal(forwarded[2][name], options[name]);
+      assert.equal(typeof forwarded[2].fetch, "function");
+    }
+  }
 });

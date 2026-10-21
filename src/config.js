@@ -6,7 +6,7 @@ export function resolveConfig(env = process.env, saved = {}) {
   const region = env.AWS_REGION || env.AWS_DEFAULT_REGION || saved.region || "us-west-2";
   const profile = env.AWS_PROFILE || saved.profile || undefined;
   if (!["us-east-1", "us-west-2"].includes(region)) {
-    throw new Error("Astra on Mantle requires region us-east-1 or us-west-2. Set AWS_REGION.");
+    throw new Error("This Mantle extension supports region us-east-1 or us-west-2. Set AWS_REGION.");
   }
   if (profile !== undefined && (typeof profile !== "string" || !profile.trim())) {
     throw new Error("Bedrock Mantle profile must be a nonempty AWS profile name.");

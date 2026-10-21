@@ -1,14 +1,32 @@
 # pi-aws-bedrock-mantle
 
-Local Pi provider for **GPT-6 Astra on Amazon Bedrock Mantle**, using short-lived IAM credentials and SigV4. Provider ID: `aws-bedrock-mantle`. Model ID: `openai.gpt-6-astra`. Tested with Pi 1.3.0 and Node 24.
+Local Pi provider for **Amazon Bedrock Mantle**, with live model discovery, short-lived IAM credentials and SigV4. Provider ID: `aws-bedrock-mantle`. Tested with Pi 1.3.0 and Node 24.
 
 ## Design
 
-Pi's existing `openai-responses` implementation handles message conversion, tool calls, image-valued function outputs, reasoning, usage, stream events, cancellation, and request/response hooks. This extension supplies a signing `fetch` implementation. There is no local HTTP proxy, background process, model-discovery request, bearer-token requirement, or port configuration.
+The extension calls `GET https://bedrock-mantle.<region>.api.aws/v1/models` using IAM SigV4, then matches the returned IDs against the host Pi's bundled `amazon-bedrock` catalog. There is no hardcoded model list or Astra fallback. Discovery always uses `/v1/models`, not `/openai/v1/models` (which returns 404).
 
-Requests go directly to `https://bedrock-mantle.<region>.api.aws/openai/v1/responses`, signed for service `bedrock-mantle`. Only POST to that exact regional route is accepted; other hosts/paths/query strings and redirects are rejected. Placeholder bearer authentication is stripped and replaced with SigV4. Images remain `input_image` data URLs inside `function_call_output.output` where Pi puts them. No Converse rewriting or image dropping is needed.
+The API lists model IDs and availability, but not context/output limits, input capabilities or pricing. Those fields come from Pi's Bedrock catalog. Exact IDs are preferred; regional prefixes and Bedrock version suffixes are normalized, and Claude's undated aliases can match dated catalog IDs. Unknown IDs and unsupported API families are skipped rather than assigned invented limits. `/mantle-status` reports skipped IDs. Updating Pi can add missing metadata; this extension does not scrape model cards at startup or use prices from other providers. Prices are estimates, not billing records. API-specific Converse compatibility flags and image limits are not copied to Mantle.
 
-Astra is explicitly configured with text/image input, reasoning, a 1,050,000-token context and 128,000-token output limit. The extension does not guess support for other models/APIs, expose server-side tool features, or implement background Responses/retrieval. Prices are standard regional rates from the AWS model card and are estimates, not billing records.
+Pi's existing streaming implementations handle message conversion, tool calls, images, reasoning, usage, cancellation and request/response hooks:
+
+| Discovered model family | Pi API | Mantle inference path |
+| --- | --- | --- |
+| OpenAI GPT, excluding GPT OSS | `openai-responses` | `/openai/v1/responses` |
+| OpenAI GPT OSS (including Safeguard) | `openai-completions` | `/v1/chat/completions` |
+| Claude | `anthropic-messages` | `/anthropic/v1/messages` |
+| Google Gemma, xAI Grok | `openai-completions` | `/openai/v1/chat/completions` |
+| DeepSeek, Mistral, Qwen, NVIDIA, Moonshot, MiniMax, Z.ai, Writer | `openai-completions` | `/v1/chat/completions` |
+
+Chat Completions uses conservative compatibility settings: `max_tokens`, system rather than developer messages, and no `store`, strict tools or `reasoning_effort` field. A model's reasoning capability does not imply adjustable thinking effort through this adapter. Family routing is maintained separately from the discovered model list; new API families need an explicit mapping.
+
+Requests go directly to the configured regional host, signed for service `bedrock-mantle`. The signer permits only GET discovery and POST to the inference paths above. Other hosts, methods, paths, query strings and redirects are rejected, except the Anthropic SDK's exact `?beta=true` query, which is included in the signature. Placeholder API keys and cookies are stripped. Image handling stays with Pi: Responses preserves image-valued function outputs; Messages and Chat Completions use their native conversions. No Converse rewriting, local proxy, background process, bearer token, or port configuration is needed. Background Responses/retrieval and server-side tool features are not implemented.
+
+### Discovery lifecycle
+
+The asynchronous extension factory waits for discovery before registration, so a fresh `pi --list-models` or `--model` launch can use the live list. Discovery has a 10-second deadline, including credential resolution. Pi's native `refreshModels` hook supports subsequent refreshes, with a one-minute freshness window; `/mantle-refresh` forces a refresh. A successful refresh replaces the list, including removing models no longer returned. A failed refresh retains the last successful in-memory list and exposes an error through `/mantle-status`.
+
+Catalogs are **in-memory only**, scoped to this extension instance's profile and region. No discovery snapshot or AWS response body is persisted. A failed initial discovery leaves this provider with no models and prints a warning; it does not silently advertise Astra or models from another profile/region. `PI_OFFLINE` skips discovery, so a new offline process has no discovered Mantle models.
 
 Inspired by the IAM-authentication goal of [samfoy/pi-bedrock-mantle](https://github.com/samfoy/pi-bedrock-mantle); independently implemented using direct signed fetch instead of its loopback proxy and legacy image conversion.
 
@@ -54,9 +72,15 @@ AWS_REGION=us-west-2 \
 pi --model aws-bedrock-mantle/openai.gpt-6-astra
 ```
 
-The selected profile uses the AWS SDK `fromIni` provider, including credential_process, SSO and role assumption. With no selected profile, the standard Node AWS credential chain is used. Credential resolution is shared across concurrent calls, cached for at most 60 seconds, refreshed before expiration, and never cached on failure. Expired credentials are rejected. Your existing credential helper (for example `ada`) must be available on the agent process's PATH; renew upstream SSO/federation as usual. Required IAM access includes `bedrock-mantle:CreateInference` and model entitlement. The extension does not modify IAM policies.
+The selected profile uses the AWS SDK `fromIni` provider, including credential_process, SSO and role assumption. With no selected profile, the standard Node AWS credential chain is used. Credential resolution is shared across concurrent calls, cached for at most 60 seconds, refreshed before expiration, and never cached on failure. Expired credentials are rejected. Your existing credential helper (for example `ada`) must be available on the agent process's PATH; renew upstream SSO/federation as usual. Required IAM access includes `bedrock-mantle:ListModels` for discovery, `bedrock-mantle:CreateInference` for inference, and model entitlement. The extension does not modify IAM policies.
 
-`/mantle-status` reports the endpoint/profile without credentials. Availability in the model picker means the provider is configured, not that every future credential refresh or model-access check will succeed. Config/env changes take effect on `/reload` or the next process; no credentials or prompt bodies are logged by the extension.
+List discovered models:
+
+```sh
+pi --list-models aws-bedrock-mantle
+```
+
+Use `/model` to select one, `/mantle-status` for profile/region, discovery time, errors and skipped IDs, or `/mantle-refresh` to refresh the list. Discovery does not guarantee every subsequent inference request will succeed: model entitlement, quotas and credentials still apply. Config/env changes take effect on `/reload` or the next process; no credentials or prompt bodies are logged by the extension.
 
 Set defaults in `~/.pi/agent/settings.json`, preserving other entries:
 
@@ -104,7 +128,7 @@ Run `paseo reload` after editing. Changes apply to new launches, not the model a
 npm test
 ```
 
-Offline tests cover exact image payload preservation (including parallel tool results), signing scope and hash, removal of bearer/cookie headers, endpoint/redirect confinement, cancellation, unbuffered streaming, error propagation, credential refresh/coalescing, configuration precedence, and preservation of Pi instrumentation hooks. Test credentials are synthetic.
+Offline tests cover discovery response validation, safe error messages, model matching/filtering/routing, catalog replacement and failure retention, offline/cancelled/superseded refreshes, exact image payload preservation, GET/POST signing scope and hash, removal of bearer/cookie headers, endpoint/redirect confinement, cancellation during credential resolution, unbuffered streaming, credential refresh/coalescing, configuration precedence, and preservation of Pi instrumentation hooks across all three adapters. Test credentials are synthetic.
 
 Optional live tests (incur inference costs):
 
@@ -119,10 +143,17 @@ pi -ne -e ./index.ts -e ./test/vision-fixture.ts --no-mcp -nc -ns -np \
   -p 'Call vision_fixture exactly once. Inspect its returned image and reply with only its dominant color.'
 ```
 
-The vision fixture produces a generated red PNG, never a screenshot or a user file. Its payload hook prints only the image-block count and nesting, not bytes/prompts/credentials. Verified live via Pi: `MANTLE_OK`, followed by a tool-returned image with correct `Red` output. Also verified a fresh Paseo Pi launch with Astra: `PASEO_MANTLE_OK`.
+The vision fixture produces a generated red PNG, never a screenshot or a user file. Its payload hook prints only the image-block count and nesting, not bytes/prompts/credentials. It can also be run with a discovered Claude or vision-capable Chat Completions model by replacing `--model` and using `--thinking off`.
+
+Live validation of discovery: Pi listed the catalog intersection for the configured region. Synthetic image-tool round trips passed with Astra (Responses), Claude Haiku 4.5 (Messages), and Ministral 3 3B (Chat Completions). Simple text requests also passed with GPT-5.6 Luna, GPT OSS 20B, and Gemma 4 E2B. These are representative checks, not an inference test of every discovered model.
 
 ## References
 
+- [AWS model discovery](https://docs.aws.amazon.com/bedrock/latest/userguide/models-get-info.html)
+- [Mantle IAM permissions](https://docs.aws.amazon.com/service-authorization/latest/reference/list_bedrock-mantle.html)
+- [Mantle Chat Completions](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html)
+- [Mantle Anthropic Messages](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html)
+- [AWS model cards and per-model routing](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html)
 - [AWS Astra model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html)
 - [AWS Mantle Responses](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html)
 - [OpenAI function outputs with images](https://developers.openai.com/api/docs/guides/function-calling?api-mode=responses)

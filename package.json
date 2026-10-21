@@ -2,7 +2,7 @@
   "name": "pi-aws-bedrock-mantle",
   "version": "0.1.0",
   "private": true,
-  "description": "Local Pi provider for Bedrock Mantle Responses using IAM SigV4 credentials",
+  "description": "Local Pi provider for Bedrock Mantle with live model discovery and IAM SigV4 credentials",
   "type": "module",
   "engines": { "node": ">=22.19.0" },
   "keywords": ["pi-package"],
