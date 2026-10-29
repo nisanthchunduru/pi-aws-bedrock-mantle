@@ -6,7 +6,7 @@ Local Pi provider for **Amazon Bedrock Mantle**, with live model discovery, shor
 
 The extension calls `GET https://bedrock-mantle.<region>.api.aws/v1/models` using IAM SigV4, then matches the returned IDs against the host Pi's bundled `amazon-bedrock` catalog. There is no hardcoded model list or Astra fallback. Discovery always uses `/v1/models`, not `/openai/v1/models` (which returns 404).
 
-The API lists model IDs and availability, but not context/output limits, input capabilities or pricing. Those fields come from Pi's Bedrock catalog. Exact IDs are preferred; regional prefixes and Bedrock version suffixes are normalized, and Claude's undated aliases can match dated catalog IDs. Unknown IDs and unsupported API families are skipped rather than assigned invented limits. `/mantle-status` reports skipped IDs. Updating Pi can add missing metadata; this extension does not scrape model cards at startup or use prices from other providers. Prices are estimates, not billing records. API-specific Converse compatibility flags and image limits are not copied to Mantle.
+The API lists model IDs and availability, but not context/output limits, input capabilities or pricing. Those fields come from Pi's Bedrock catalog. Exact IDs are preferred; regional prefixes and Bedrock version suffixes are normalized, and Claude's undated aliases can match dated catalog IDs. Unknown IDs and unsupported API families are skipped rather than assigned invented limits. `/aws-bedrock-mantle-status` reports skipped IDs. Updating Pi can add missing metadata; this extension does not scrape model cards at startup or use prices from other providers. Prices are estimates, not billing records. API-specific Converse compatibility flags and image limits are not copied to Mantle.
 
 Pi's existing streaming implementations handle message conversion, tool calls, images, reasoning, usage, cancellation and request/response hooks:
 
@@ -24,7 +24,7 @@ Requests go directly to the configured regional host, signed for service `bedroc
 
 ### Discovery lifecycle
 
-The asynchronous extension factory waits for discovery before registration, so a fresh `pi --list-models` or `--model` launch can use the available list. A successful discovery is cached on disk for five minutes and can be reused by other Pi processes using the same AWS profile and region. Pi's native `refreshModels` hook checks this cache before making a request; `/aws-bedrock-mantle-refresh-models` bypasses it. Discovery has a 10-second deadline, including credential resolution. A successful network refresh replaces the list, including removing models no longer returned. A failed refresh retains the last list loaded by that process and exposes an error through `/mantle-status`.
+The asynchronous extension factory waits for discovery before registration, so a fresh `pi --list-models` or `--model` launch can use the available list. A successful discovery is cached on disk for five minutes and can be reused by other Pi processes using the same AWS profile and region. Pi's native `refreshModels` hook checks this cache before making a request; `/aws-bedrock-mantle-refresh-models` bypasses it. Discovery has a 10-second deadline, including credential resolution. A successful network refresh replaces the list, including removing models no longer returned. A failed refresh retains the last list loaded by that process and exposes an error through `/aws-bedrock-mantle-status`.
 
 Caches are stored under `$XDG_CACHE_HOME/pi-aws-bedrock-mantle`, or `~/.cache/pi-aws-bedrock-mantle` when `XDG_CACHE_HOME` is unset. Cache files contain only validated model-list entries, the region, a profile identifier and the discovery timestamp. They do not contain AWS credentials or inference requests. Cache keys include both profile and region because model entitlement can differ between identities. Writes use private file permissions and atomic replacement so concurrent Pi processes cannot read a partial file. Invalid, expired or unreadable cache files are ignored. `PI_OFFLINE` permits a fresh cache to be loaded without network access; without one, this provider has no models.
 
@@ -81,7 +81,7 @@ List discovered models:
 pi --list-models aws-bedrock-mantle
 ```
 
-Use `/model` to select one, `/mantle-status` for profile/region, discovery time, errors and skipped IDs, or `/aws-bedrock-mantle-refresh-models` to refresh the list. Discovery does not guarantee every subsequent inference request will succeed: model entitlement, quotas and credentials still apply. Config/env changes take effect on `/reload` or the next process; no credentials or prompt bodies are logged by the extension.
+Use `/model` to select one, `/aws-bedrock-mantle-status` for profile/region, discovery time, errors and skipped IDs, or `/aws-bedrock-mantle-refresh-models` to refresh the list. Discovery does not guarantee every subsequent inference request will succeed: model entitlement, quotas and credentials still apply. Config/env changes take effect on `/reload` or the next process; no credentials or prompt bodies are logged by the extension.
 
 Set defaults in `~/.pi/agent/settings.json`, preserving other entries:
 

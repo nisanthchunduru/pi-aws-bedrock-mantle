@@ -16,7 +16,7 @@ export default async function bedrockMantle(pi: ExtensionAPI) {
     console.warn(`[${PROVIDER_ID}] ${error.message}`);
   }
   pi.registerProvider(provider);
-  pi.registerCommand("mantle-status", {
+  pi.registerCommand("aws-bedrock-mantle-status", {
     description: "Show Mantle discovery status, skipped models and IAM profile without credentials",
     handler: async (_args, ctx) => {
       const status = provider.getDiscoveryStatus();
@@ -34,7 +34,7 @@ export default async function bedrockMantle(pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       const result = await ctx.modelRegistry.refresh({ providers: [PROVIDER_ID], force: true });
       const error = result.errors.get(PROVIDER_ID);
-      ctx.ui.notify(error ? error.message : `Mantle models: ${provider.getModels().length}. See /mantle-status for details.`, error ? "warning" : "info");
+      ctx.ui.notify(error ? error.message : `Mantle models: ${provider.getModels().length}. See /aws-bedrock-mantle-status for details.`, error ? "warning" : "info");
     },
   });
 }
