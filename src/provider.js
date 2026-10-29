@@ -3,6 +3,8 @@ import { listMantleModels } from "./discovery.js";
 import { mapMantleModels, PROVIDER_ID } from "./models.js";
 import { createSignedFetch } from "./signed-fetch.js";
 
+const MODEL_CACHE_TTL_MS = 5 * 60_000;
+
 export { PROVIDER_ID } from "./models.js";
 
 export function createMantleProvider(ai, config, credentials = createCredentials(config.profile)) {
@@ -40,7 +42,7 @@ export function createMantleProvider(ai, config, credentials = createCredentials
     getDiscoveryStatus: () => ({ count: discovered.models.length, skipped: [...discovered.skipped], checkedAt, error }),
     refreshModels: async context => {
       if (!context.allowNetwork || context.signal.aborted) return;
-      if (!context.force && checkedAt && Date.now() - checkedAt < 60_000) return;
+      if (!context.force && checkedAt && Date.now() - checkedAt < MODEL_CACHE_TTL_MS) return;
       const signal = AbortSignal.any([context.signal, AbortSignal.timeout(10_000)]);
       try {
         const entries = await listMantleModels(config, optionsFor().fetch, signal);

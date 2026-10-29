@@ -105,6 +105,29 @@ test("Different model versions are not matched by fuzzy prefix", () => {
   assert.deepEqual(models, []);
 });
 
+test("Successful discovery is cached for five minutes unless refresh is forced", async t => {
+  let clock = 1_000;
+  let calls = 0;
+  t.mock.method(Date, "now", () => clock);
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return Response.json({ data: entries([astra.id]) });
+  });
+  const provider = createMantleProvider(mockAi(), config, credentials);
+
+  await provider.refreshModels(refreshContext());
+  clock += 5 * 60_000 - 1;
+  await provider.refreshModels(refreshContext());
+  assert.equal(calls, 1);
+
+  clock++;
+  await provider.refreshModels(refreshContext());
+  assert.equal(calls, 2);
+
+  await provider.refreshModels(refreshContext({ force: true }));
+  assert.equal(calls, 3);
+});
+
 test("Live refresh replaces the catalog, keeps the previous list on failure and clears it on a successful empty response", async t => {
   let data = entries([astra.id, "deepseek.v3.2"]);
   let status = 200;

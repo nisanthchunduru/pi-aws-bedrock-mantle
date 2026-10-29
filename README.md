@@ -24,7 +24,7 @@ Requests go directly to the configured regional host, signed for service `bedroc
 
 ### Discovery lifecycle
 
-The asynchronous extension factory waits for discovery before registration, so a fresh `pi --list-models` or `--model` launch can use the live list. Discovery has a 10-second deadline, including credential resolution. Pi's native `refreshModels` hook supports subsequent refreshes, with a one-minute freshness window; `/mantle-refresh` forces a refresh. A successful refresh replaces the list, including removing models no longer returned. A failed refresh retains the last successful in-memory list and exposes an error through `/mantle-status`.
+The asynchronous extension factory waits for discovery before registration, so a fresh `pi --list-models` or `--model` launch can use the live list. Discovery has a 10-second deadline, including credential resolution. Pi's native `refreshModels` hook supports subsequent refreshes, with a five-minute freshness window; `/mantle-refresh` forces a refresh. A successful refresh replaces the list, including removing models no longer returned. A failed refresh retains the last successful in-memory list and exposes an error through `/mantle-status`.
 
 Catalogs are **in-memory only**, scoped to this extension instance's profile and region. No discovery snapshot or AWS response body is persisted. A failed initial discovery leaves this provider with no models and prints a warning; it does not silently advertise Astra or models from another profile/region. `PI_OFFLINE` skips discovery, so a new offline process has no discovered Mantle models.
 
