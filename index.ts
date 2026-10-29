@@ -29,7 +29,7 @@ export default async function bedrockMantle(pi: ExtensionAPI) {
       ctx.ui.notify(details.join("\n"), status.error ? "warning" : "info");
     },
   });
-  pi.registerCommand("mantle-refresh", {
+  pi.registerCommand("aws-bedrock-mantle-refresh-models", {
     description: "Refresh the configured region's Mantle models",
     handler: async (_args, ctx) => {
       const result = await ctx.modelRegistry.refresh({ providers: [PROVIDER_ID], force: true });
