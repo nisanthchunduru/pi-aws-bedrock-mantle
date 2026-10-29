@@ -1,13 +1,12 @@
 import { createCredentials } from "./credentials.js";
 import { listMantleModels } from "./discovery.js";
+import { createModelCache, MODEL_CACHE_TTL_MS } from "./model-cache.js";
 import { mapMantleModels, PROVIDER_ID } from "./models.js";
 import { createSignedFetch } from "./signed-fetch.js";
 
-const MODEL_CACHE_TTL_MS = 5 * 60_000;
-
 export { PROVIDER_ID } from "./models.js";
 
-export function createMantleProvider(ai, config, credentials = createCredentials(config.profile)) {
+export function createMantleProvider(ai, config, credentials = createCredentials(config.profile), modelCache = createModelCache(config)) {
   const catalog = ai.getModels("amazon-bedrock");
   let discovered = { models: [], skipped: [] };
   let checkedAt;
@@ -41,14 +40,26 @@ export function createMantleProvider(ai, config, credentials = createCredentials
     getAllModels: () => discovered.models,
     getDiscoveryStatus: () => ({ count: discovered.models.length, skipped: [...discovered.skipped], checkedAt, error }),
     refreshModels: async context => {
-      if (!context.allowNetwork || context.signal.aborted) return;
-      if (!context.force && checkedAt && Date.now() - checkedAt < MODEL_CACHE_TTL_MS) return;
+      if (context.signal.aborted) return;
+      if (!context.force) {
+        if (checkedAt && Date.now() - checkedAt < MODEL_CACHE_TTL_MS) return;
+        const cached = await modelCache.read();
+        if (context.signal.aborted) return;
+        if (cached) {
+          const next = mapMantleModels(cached.entries, catalog, config);
+          await context.publish({ update: () => { discovered = next; checkedAt = cached.checkedAt; error = undefined; } });
+          return;
+        }
+      }
+      if (!context.allowNetwork) return;
       const signal = AbortSignal.any([context.signal, AbortSignal.timeout(10_000)]);
       try {
         const entries = await listMantleModels(config, optionsFor().fetch, signal);
         const next = mapMantleModels(entries, catalog, config);
+        const completedAt = Date.now();
         signal.throwIfAborted();
-        await context.publish({ update: () => { discovered = next; checkedAt = Date.now(); error = undefined; } });
+        const published = await context.publish({ update: () => { discovered = next; checkedAt = completedAt; error = undefined; } });
+        if (published) await modelCache.write(entries, completedAt);
       } catch (failure) {
         if (!context.signal.aborted) {
           const message = signal.aborted ? "Mantle model discovery timed out after 10 seconds." : failure.message;

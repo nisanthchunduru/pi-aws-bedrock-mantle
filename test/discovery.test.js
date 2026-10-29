@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { resolveConfig } from "../src/config.js";
 import { listMantleModels } from "../src/discovery.js";
@@ -6,7 +9,7 @@ import { mapMantleModels } from "../src/models.js";
 import { createMantleProvider } from "../src/provider.js";
 import { astra, catalog, mockAi, refreshContext } from "./model-fixtures.js";
 
-const config = resolveConfig({});
+const config = { ...resolveConfig({}), cacheDirectory: undefined };
 const credentials = async () => ({ accessKeyId: "TEST", secretAccessKey: "fake" });
 const entries = ids => ids.map(id => ({ id, status: "available" }));
 
@@ -126,6 +129,56 @@ test("Successful discovery is cached for five minutes unless refresh is forced",
 
   await provider.refreshModels(refreshContext({ force: true }));
   assert.equal(calls, 3);
+});
+
+test("Fresh disk cache is shared by Pi processes and isolated by profile and region", async t => {
+  const root = join(homedir(), "tmp-workspaces");
+  mkdirSync(root, { recursive: true });
+  const workspace = mkdtempSync(join(root, "mantle-model-cache-"));
+  const cacheDirectory = join(workspace, "cache");
+  let clock = 10_000;
+  let calls = 0;
+  t.mock.method(Date, "now", () => clock);
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return Response.json({ data: entries([astra.id]) });
+  });
+
+  try {
+    const sharedConfig = { ...config, profile: "shared-profile", cacheDirectory };
+    const first = createMantleProvider(mockAi(), sharedConfig, credentials);
+    await first.refreshModels(refreshContext());
+    assert.equal(calls, 1);
+
+    const second = createMantleProvider(mockAi(), sharedConfig, () => { throw new Error("must not resolve"); });
+    await second.refreshModels(refreshContext({ allowNetwork: false }));
+    assert.deepEqual(second.getModels().map(model => model.id), [astra.id]);
+    assert.equal(second.getDiscoveryStatus().checkedAt, clock);
+    assert.equal(calls, 1);
+
+    const otherProfile = createMantleProvider(mockAi(), { ...sharedConfig, profile: "other-profile" }, credentials);
+    await otherProfile.refreshModels(refreshContext({ allowNetwork: false }));
+    assert.deepEqual(otherProfile.getModels(), []);
+
+    const otherRegion = createMantleProvider(mockAi(), {
+      ...sharedConfig,
+      region: "us-east-1",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/openai/v1",
+    }, credentials);
+    await otherRegion.refreshModels(refreshContext({ allowNetwork: false }));
+    assert.deepEqual(otherRegion.getModels(), []);
+
+    clock += 5 * 60_000;
+    const expired = createMantleProvider(mockAi(), sharedConfig, credentials);
+    await expired.refreshModels(refreshContext());
+    assert.equal(calls, 2);
+
+    const forced = createMantleProvider(mockAi(), sharedConfig, credentials);
+    await forced.refreshModels(refreshContext({ force: true }));
+    assert.equal(calls, 3);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
 });
 
 test("Live refresh replaces the catalog, keeps the previous list on failure and clears it on a successful empty response", async t => {

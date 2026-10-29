@@ -1,3 +1,10 @@
+export function validateMantleModelEntries(entries) {
+  if (!Array.isArray(entries) || entries.some(entry => !entry || typeof entry.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(entry.id))) {
+    throw new Error("Mantle model discovery returned an invalid model list.");
+  }
+  return entries;
+}
+
 export async function listMantleModels(config, signedFetch, signal) {
   signal.throwIfAborted();
   let response;
@@ -19,9 +26,7 @@ export async function listMantleModels(config, signedFetch, signal) {
     throw new Error("Mantle model discovery returned invalid JSON.");
   }
   signal.throwIfAborted();
-  if (!Array.isArray(body?.data) || body.data.some(entry => !entry || typeof entry.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(entry.id))) {
-    throw new Error("Mantle model discovery returned an invalid model list.");
-  }
+  validateMantleModelEntries(body?.data);
   if (body.has_more || body.next_token || body.nextToken) {
     throw new Error("Mantle model discovery returned an unsupported paginated list; refusing a partial catalog.");
   }

@@ -11,7 +11,8 @@ export function resolveConfig(env = process.env, saved = {}) {
   if (profile !== undefined && (typeof profile !== "string" || !profile.trim())) {
     throw new Error("Bedrock Mantle profile must be a nonempty AWS profile name.");
   }
-  return { region, profile, baseUrl: `https://bedrock-mantle.${region}.api.aws/openai/v1` };
+  const cacheDirectory = join(env.XDG_CACHE_HOME || join(env.HOME || homedir(), ".cache"), "pi-aws-bedrock-mantle");
+  return { region, profile, baseUrl: `https://bedrock-mantle.${region}.api.aws/openai/v1`, cacheDirectory };
 }
 
 export function loadConfig(env = process.env) {

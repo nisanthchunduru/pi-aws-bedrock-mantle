@@ -24,9 +24,9 @@ Requests go directly to the configured regional host, signed for service `bedroc
 
 ### Discovery lifecycle
 
-The asynchronous extension factory waits for discovery before registration, so a fresh `pi --list-models` or `--model` launch can use the live list. Discovery has a 10-second deadline, including credential resolution. Pi's native `refreshModels` hook supports subsequent refreshes, with a five-minute freshness window; `/mantle-refresh` forces a refresh. A successful refresh replaces the list, including removing models no longer returned. A failed refresh retains the last successful in-memory list and exposes an error through `/mantle-status`.
+The asynchronous extension factory waits for discovery before registration, so a fresh `pi --list-models` or `--model` launch can use the available list. A successful discovery is cached on disk for five minutes and can be reused by other Pi processes using the same AWS profile and region. Pi's native `refreshModels` hook checks this cache before making a request; `/mantle-refresh` bypasses it. Discovery has a 10-second deadline, including credential resolution. A successful network refresh replaces the list, including removing models no longer returned. A failed refresh retains the last list loaded by that process and exposes an error through `/mantle-status`.
 
-Catalogs are **in-memory only**, scoped to this extension instance's profile and region. No discovery snapshot or AWS response body is persisted. A failed initial discovery leaves this provider with no models and prints a warning; it does not silently advertise Astra or models from another profile/region. `PI_OFFLINE` skips discovery, so a new offline process has no discovered Mantle models.
+Caches are stored under `$XDG_CACHE_HOME/pi-aws-bedrock-mantle`, or `~/.cache/pi-aws-bedrock-mantle` when `XDG_CACHE_HOME` is unset. Cache files contain only validated model-list entries, the region, a profile identifier and the discovery timestamp. They do not contain AWS credentials or inference requests. Cache keys include both profile and region because model entitlement can differ between identities. Writes use private file permissions and atomic replacement so concurrent Pi processes cannot read a partial file. Invalid, expired or unreadable cache files are ignored. `PI_OFFLINE` permits a fresh cache to be loaded without network access; without one, this provider has no models.
 
 Inspired by the IAM-authentication goal of [samfoy/pi-bedrock-mantle](https://github.com/samfoy/pi-bedrock-mantle); independently implemented using direct signed fetch instead of its loopback proxy and legacy image conversion.
 
@@ -61,6 +61,7 @@ Supported environment variables:
 | `AWS_REGION` | Primary region selector: `us-west-2` or `us-east-1`. |
 | `AWS_DEFAULT_REGION` | Region fallback when `AWS_REGION` is unset. |
 | `XDG_CONFIG_HOME` | Configuration root; defaults to `~/.config`. |
+| `XDG_CACHE_HOME` | Shared model-cache root; defaults to `~/.cache`. |
 
 Precedence: standard AWS variables → saved configuration → built-in defaults. `AWS_REGION` takes precedence over `AWS_DEFAULT_REGION`. An unsupported region causes an error, not silent rerouting. No `BEDROCK_MANTLE_*` variables are read; use `XDG_CONFIG_HOME` to select a different configuration root.
 
